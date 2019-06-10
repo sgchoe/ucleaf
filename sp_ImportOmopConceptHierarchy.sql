@@ -6,13 +6,15 @@ GO
 -- Description:	Import OMOP concepts from 'LeafClinDB' database into 'LeafDB' app.Concepts table.
 --				OMOP concept, concept_relationship, and concept_ancestor tables must exist and be
 --				fully populated as the first two tables will be used to build concept hierarchy
---				and the latter will be referenced in the concept 'SqlSetWhere' clause.
+--				and the latter will be referenced in the concept 'SqlSetWhere' clause.  LeafDB
+--				database must also be in 'Simple' recovery mode for proper batched execution that
+--				minimizes log space usage.
 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
-CREATE PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
+ALTER PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
 	@omopRootConceptId INT,
 	@leafRootConceptId UNIQUEIDENTIFIER,
 	@batchSize INT
@@ -34,7 +36,7 @@ BEGIN
 		child_concept_code VARCHAR(50) not null
 	);
 
-	CREATE INDEX IX_OPCH_CONCEPT_ID ON dbo.__omopConcepts (parent_concept_id);
+	CREATE INDEX IX___OC_CONCEPT_ID ON dbo.__omopConcepts (parent_concept_id);
 
 	-- Recursively find all parent/child relationship permutations under specified OMOP root concept
 	WITH omopParentChildConcepts AS
@@ -149,6 +151,8 @@ BEGIN
 		WHERE
 			opch.row_id BETWEEN @lastProcessedRowId AND @lastProcessedRowId + @batchSize;
 
+		CHECKPOINT;
+
 		IF @lastProcessedRowId = @maxRowId
 			BREAK;
 
@@ -161,8 +165,6 @@ BEGIN
 			END;
 
 		PRINT CONVERT(VARCHAR, @lastProcessedRowId) + ' Leaf concepts added';
-
-		CHECKPOINT;
 	END
 
 	DROP TABLE dbo.__omopConcepts;
