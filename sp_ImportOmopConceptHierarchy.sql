@@ -2,22 +2,28 @@ USE [LeafDB]
 GO
 /******
 -- Author:		Seong Choi
--- Create Date: 2019-06-10
--- Description:	Import OMOP concepts from 'LeafClinDB' database into 'LeafDB' app.Concepts table.
+-- Modified:	2019-06-10
+-- Description:	Import OMOP concepts from 'LeafClinDB' database into 'LeafDB' app.Concept table.
 --				OMOP concept, concept_relationship, and concept_ancestor tables must exist and be
---				fully populated as the first two tables will be used to build concept hierarchy
---				and the latter will be referenced in the concept 'SqlSetWhere' clause.  LeafDB
---				database must also be in 'Simple' recovery mode for proper batched execution that
---				minimizes log space usage.
+--				fully populated as the first two tables will be used to build the concept hierarchy
+--				and the latter will be referenced in each Leaf concept's 'SqlSetWhere' clause.  The
+--				final update to link parent/child concepts in the Leaf concept table may take a long
+--				time to complete if the ExternalId and ExternalParentId columns aren't indexed, even
+--				when importing a relatively small concept hierarchy of ~10k records.  The Leaf db
+--				must be in 'Simple' recovery mode for proper batched execution that minimizes log
+--				space usage.  Batch size defaults to 100k if not specified.  OMOP concepts that are
+--				imported can be restricted by providing a comma-separated list of domain_ids, e.g.
+--				'Condition,Drug,Medication,Procedure'.
 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
-ALTER PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
+CREATE PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
 	@omopRootConceptId INT,
 	@leafRootConceptId UNIQUEIDENTIFIER,
-	@batchSize INT
+	@batchSize INT = 100000,
+	@omopAllowedConceptDomainIds VARCHAR(50) = ''
 AS
 BEGIN
 	SET NOCOUNT ON;
@@ -38,6 +44,7 @@ BEGIN
 
 	CREATE INDEX IX___OC_CONCEPT_ID ON dbo.__omopConcepts (parent_concept_id);
 
+	DECLARE @domainIdWildcards VARCHAR = '%, *, ';
 	-- Recursively find all parent/child relationship permutations under specified OMOP root concept
 	WITH omopParentChildConcepts AS
 	(
@@ -56,7 +63,11 @@ BEGIN
 			LeafClinDB.dbo.concept child ON child.concept_id = cr.concept_id_2
 		WHERE
 			cr.concept_id_1 = @omopRootConceptId AND
-			cr.relationship_id = 'Subsumes'
+			cr.relationship_id = 'Subsumes' AND
+			(
+				ISNULL(@omopAllowedConceptDomainIds, '') IN (SELECT TRIM(value) FROM STRING_SPLIT(@domainIdWildcards, ',')) OR
+				child.domain_id IN (SELECT TRIM(value) FROM STRING_SPLIT(@omopAllowedConceptDomainIds, ','))
+			)
 		UNION ALL
 		SELECT
 			parent.concept_id AS parent_concept_id,
@@ -73,6 +84,11 @@ BEGIN
 			LeafClinDB.dbo.concept parent ON parent.concept_id = cr.concept_id_1
 		JOIN
 			LeafClinDB.dbo.concept child ON child.concept_id = cr.concept_id_2
+		WHERE
+			(
+				ISNULL(@omopAllowedConceptDomainIds, '') IN (SELECT TRIM(value) FROM STRING_SPLIT(@domainIdWildcards, ',')) OR
+				child.domain_id IN (SELECT TRIM(value) FROM STRING_SPLIT(@omopAllowedConceptDomainIds, ','))
+			)
 	)
 
 	INSERT INTO
@@ -131,44 +147,47 @@ BEGIN
 			AddDateTime,
 			ContentLastUpdateDateTime)
 		SELECT
-			'OMOP:' + CONVERT(VARCHAR, opch.child_concept_id) + ':' + opch.child_concept_code,
-			'OMOP:' + CONVERT(VARCHAR, opch.parent_concept_id) + ':' + opch.parent_concept_code,
+			'OMOP:' + CONVERT(VARCHAR, _oc.child_concept_id) + ':' + _oc.child_concept_code,
+			'OMOP:' + CONVERT(VARCHAR, _oc.parent_concept_id) + ':' + _oc.parent_concept_code,
 			CASE
-				WHEN EXISTS (SELECT 1 FROM dbo.__omopConcepts opchp WHERE opchp.parent_concept_id = opch.child_concept_id) THEN
+				WHEN EXISTS (SELECT 1 FROM dbo.__omopConcepts opchp WHERE opchp.parent_concept_id = _oc.child_concept_id) THEN
 					1
 				ELSE
 					0
 			END,
 			@leafRootConceptSqlSetId,
 			'EXISTS (SELECT 1 FROM concept_ancestor ca WHERE ca.descendant_concept_id = @.concept_id ' +
-				'AND ca.ancestor_concept_id = ' + CONVERT(varchar, opch.child_concept_id) + ')',
-			opch.child_concept_name,
-			'Had observation: ' + opch.child_concept_name,
+				'AND ca.ancestor_concept_id = ' + CONVERT(varchar, _oc.child_concept_id) + ')',
+			CASE
+				WHEN _oc.child_concept_name LIKE '%[0-9A-Za-z]%' THEN
+					_oc.child_concept_name
+				ELSE
+					_oc.child_concept_code
+			END, -- use OMOP concept code instead of name if blank, "" (CPT), or is otherwise not meaningful
+			'Had observation: ' +
+				CASE
+					WHEN _oc.child_concept_name LIKE '%[0-9A-Za-z]%' THEN
+						_oc.child_concept_name
+					ELSE
+						_oc.child_concept_code
+				END, -- use OMOP concept code instead of name if blank, "" (CPT), or is otherwise not meaningful
 			@currentDateTime,
 			@currentDateTime
 		FROM
-			dbo.__omopConcepts opch
+			dbo.__omopConcepts _oc
 		WHERE
-			opch.row_id BETWEEN @lastProcessedRowId AND @lastProcessedRowId + @batchSize;
+			_oc.row_id BETWEEN @lastProcessedRowId AND @lastProcessedRowId + @batchSize;
 
 		CHECKPOINT;
 
-		IF @lastProcessedRowId = @maxRowId
-			BREAK;
+		SELECT @lastProcessedRowId = @lastProcessedRowId + @batchSize + 1;
 
-		SELECT @lastProcessedRowId =
-			CASE
-				WHEN @lastProcessedRowId + @batchSize + 1 < @maxRowId THEN
-					@lastProcessedRowId + @batchSize + 1
-				ELSE
-					@maxRowId
-			END;
-
-		PRINT CONVERT(VARCHAR, @lastProcessedRowId) + ' Leaf concepts added';
+		PRINT CONVERT(VARCHAR, CASE WHEN @lastProcessedRowId > @maxRowId THEN @maxRowId ELSE @lastProcessedRowId END) +
+			' Leaf concepts added';
 	END
 
 	DROP TABLE dbo.__omopConcepts;
-
+	
 	-- Establish parent/child linkage of newly inserted Leaf concepts
 	DECLARE @rowCount INT = 1;
 	WHILE @rowCount > 0
