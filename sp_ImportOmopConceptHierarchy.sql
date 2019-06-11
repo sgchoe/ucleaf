@@ -19,7 +19,7 @@ SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
-CREATE PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
+ALTER PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
 	@omopRootConceptId INT,
 	@leafRootConceptId UNIQUEIDENTIFIER,
 	@batchSize INT = 100000,
