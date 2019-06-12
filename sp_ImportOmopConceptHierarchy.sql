@@ -1,6 +1,6 @@
 USE [LeafDB]
 GO
-/****** Object:  StoredProcedure [dbo].[sp_ImportOmopConceptHierarchy]    Script Date: 6/11/2019 3:17:40 PM ******/
+/****** Object:  StoredProcedure [dbo].[sp_ImportOmopConceptHierarchy]    Script Date: 6/12/2019 11:06:56 AM ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -36,7 +36,7 @@ BEGIN
 
 	CREATE INDEX IX___OC_CONCEPT_ID ON dbo.__omopConcepts (parent_concept_id);
 
-	DECLARE @domainIdWildcards VARCHAR = '%, *, ';
+	DECLARE @domainIdWildcards VARCHAR(50) = '%, *, ';
 	-- Recursively find all parent/child relationship permutations under specified OMOP root concept
 	WITH omopParentChildConcepts AS
 	(
@@ -94,6 +94,12 @@ BEGIN
 		parent_concept_name, parent_concept_id, child_concept_name, child_concept_id;
 
 	PRINT CONVERT(VARCHAR, @@ROWCOUNT) + ' rows inserted into OMOP hierarchy cache table';
+
+	IF NOT EXISTS (SELECT 1 FROM dbo.__omopConcepts)
+	BEGIN
+		PRINT 'Exiting';
+		RETURN;
+	END
 
 	CHECKPOINT;
 
