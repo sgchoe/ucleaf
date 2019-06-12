@@ -8,6 +8,7 @@ GO
 ALTER PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
 	@omopRootConceptId INT,
 	@leafRootConceptId UNIQUEIDENTIFIER,
+	@leafDisplayTextPrefix VARCHAR(50),
 	@batchSize INT = 100000,
 	@omopAllowedConceptDomainIds VARCHAR(50) = ''
 AS
@@ -164,7 +165,7 @@ BEGIN
 				ELSE
 					_oc.child_concept_code
 			END, -- use OMOP concept code instead of name if blank, "" (CPT), or is otherwise not meaningful
-			'Had observation: ' +
+			@leafDisplayTextPrefix +
 				CASE
 					WHEN _oc.child_concept_name LIKE '%[0-9A-Za-z]%' THEN
 						_oc.child_concept_name
