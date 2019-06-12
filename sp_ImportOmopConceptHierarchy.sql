@@ -7,10 +7,11 @@ SET QUOTED_IDENTIFIER ON
 GO
 ALTER PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
 	@omopRootConceptId INT,
+	@omopConceptIdColumnName VARCHAR(255),
 	@leafRootConceptId UNIQUEIDENTIFIER,
-	@leafDisplayTextPrefix VARCHAR(50),
+	@leafDisplayTextPrefix VARCHAR(255),
 	@batchSize INT = 100000,
-	@omopAllowedConceptDomainIds VARCHAR(50) = ''
+	@omopAllowedConceptDomainIds VARCHAR(255) = ''
 AS
 BEGIN
 	SET NOCOUNT ON;
@@ -157,7 +158,7 @@ BEGIN
 					0
 			END,
 			@leafRootConceptSqlSetId,
-			'EXISTS (SELECT 1 FROM concept_ancestor ca WHERE ca.descendant_concept_id = @.concept_id ' +
+			'EXISTS (SELECT 1 FROM concept_ancestor ca WHERE ca.descendant_concept_id = @.' + @omopConceptIdColumnName + ' ' +
 				'AND ca.ancestor_concept_id = ' + CONVERT(varchar, _oc.child_concept_id) + ')',
 			CASE
 				WHEN _oc.child_concept_name LIKE '%[0-9A-Za-z]%' THEN
