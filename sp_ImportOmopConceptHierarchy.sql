@@ -1,20 +1,6 @@
 USE [LeafDB]
 GO
-/******
--- Author:		Seong Choi
--- Modified:	2019-06-10
--- Description:	Import OMOP concepts from 'LeafClinDB' database into 'LeafDB' app.Concept table.
---				OMOP concept, concept_relationship, and concept_ancestor tables must exist and be
---				fully populated as the first two tables will be used to build the concept hierarchy
---				and the latter will be referenced in each Leaf concept's 'SqlSetWhere' clause.  The
---				final update to link parent/child concepts in the Leaf concept table may take a long
---				time to complete if the ExternalId and ExternalParentId columns aren't indexed, even
---				when importing a relatively small concept hierarchy of ~10k records.  The Leaf db
---				must be in 'Simple' recovery mode for proper batched execution that minimizes log
---				space usage.  Batch size defaults to 100k if not specified.  OMOP concepts that are
---				imported can be restricted by providing a comma-separated list of domain_ids, e.g.
---				'Condition,Drug,Medication,Procedure'.
-******/
+/****** Object:  StoredProcedure [dbo].[sp_ImportOmopConceptHierarchy]    Script Date: 6/11/2019 3:17:40 PM ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
@@ -29,7 +15,13 @@ BEGIN
 	SET NOCOUNT ON;
 
 	IF (EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA = 'dbo' AND  TABLE_NAME = '__omopConcepts'))
-		DROP TABLE dbo.__omopConcepts
+		DROP TABLE dbo.__omopConcepts;
+
+	IF (NOT EXISTS (SELECT 1 FROM LeafClinDB.dbo.concept WHERE concept_id = @omopRootConceptId))
+		THROW 50000, 'OMOP root concept not found', 1;
+
+	IF (NOT EXISTS (SELECT 1 FROM app.Concept WHERE Id = @leafRootConceptId AND RootId IS NOT NULL))
+		THROW 50000, 'Leaf root concept not found or invalid (non-null RootId required)', 1;
 
 	CREATE TABLE dbo.__omopConcepts
 	(
@@ -137,7 +129,8 @@ BEGIN
 	WHILE @lastProcessedRowId <= @maxRowId
 	BEGIN
 		INSERT INTO app.Concept
-			(ExternalId,
+			(RootId,
+			ExternalId,
 			ExternalParentId,
 			IsParent,
 			SqlSetId,
@@ -147,6 +140,7 @@ BEGIN
 			AddDateTime,
 			ContentLastUpdateDateTime)
 		SELECT
+			@leafRootConceptRootId,
 			'OMOP:' + CONVERT(VARCHAR, _oc.child_concept_id) + ':' + _oc.child_concept_code,
 			'OMOP:' + CONVERT(VARCHAR, _oc.parent_concept_id) + ':' + _oc.parent_concept_code,
 			CASE
