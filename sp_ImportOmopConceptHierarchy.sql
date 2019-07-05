@@ -1,17 +1,18 @@
 USE [LeafDB]
 GO
-/****** Object:  StoredProcedure [dbo].[sp_ImportOmopConceptHierarchy]    Script Date: 6/12/2019 11:06:56 AM ******/
+/****** Object:  StoredProcedure [dbo].[sp_ImportOmopConceptHierarchy]    Script Date: 7/5/2019 1:30:21 PM ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
 GO
-ALTER PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
-	@omopRootConceptId INT,
-	@omopConceptIdColumnName VARCHAR(255),
+CREATE PROCEDURE [dbo].[sp_ImportOmopConceptHierarchy]
 	@leafRootConceptId UNIQUEIDENTIFIER,
 	@leafDisplayTextPrefix VARCHAR(255),
+	@omopRootConceptId INT,
+	@omopConceptIdColumnName VARCHAR(255),
 	@batchSize INT = 100000,
-	@omopAllowedConceptDomainIds VARCHAR(255) = ''
+	@omopAllowedConceptDomainIds VARCHAR(255) = '',
+	@omopAllowedConceptClassIds VARCHAR(255) = ''
 AS
 BEGIN
 	SET NOCOUNT ON;
@@ -19,11 +20,11 @@ BEGIN
 	IF (EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA = 'dbo' AND  TABLE_NAME = '__omopConcepts'))
 		DROP TABLE dbo.__omopConcepts;
 
-	IF (NOT EXISTS (SELECT 1 FROM LeafClinDB.dbo.concept WHERE concept_id = @omopRootConceptId))
-		THROW 50000, 'OMOP root concept not found', 1;
-
 	IF (NOT EXISTS (SELECT 1 FROM app.Concept WHERE Id = @leafRootConceptId AND RootId IS NOT NULL))
 		THROW 50000, 'Leaf root concept not found or invalid (non-null RootId required)', 1;
+
+	IF (NOT EXISTS (SELECT 1 FROM LeafClinDB.dbo.concept WHERE concept_id = @omopRootConceptId))
+		THROW 50000, 'OMOP root concept not found', 1;
 
 	CREATE TABLE dbo.__omopConcepts
 	(
@@ -39,6 +40,8 @@ BEGIN
 	CREATE INDEX IX___OC_CONCEPT_ID ON dbo.__omopConcepts (parent_concept_id);
 
 	DECLARE @domainIdWildcards VARCHAR(50) = '%, *, ';
+	DECLARE @classIdWildcards VARCHAR(50) = '%, *, ';
+
 	-- Recursively find all parent/child relationship permutations under specified OMOP root concept
 	WITH omopParentChildConcepts AS
 	(
@@ -61,6 +64,10 @@ BEGIN
 			(
 				ISNULL(@omopAllowedConceptDomainIds, '') IN (SELECT TRIM(value) FROM STRING_SPLIT(@domainIdWildcards, ',')) OR
 				child.domain_id IN (SELECT TRIM(value) FROM STRING_SPLIT(@omopAllowedConceptDomainIds, ','))
+			) AND
+			(
+				ISNULL(@omopAllowedConceptClassIds, '') IN (SELECT TRIM(value) FROM STRING_SPLIT(@classIdWildcards, ',')) OR
+				child.concept_class_id IN (SELECT TRIM(value) FROM STRING_SPLIT(@omopAllowedConceptClassIds, ','))
 			)
 		UNION ALL
 		SELECT
@@ -82,6 +89,10 @@ BEGIN
 			(
 				ISNULL(@omopAllowedConceptDomainIds, '') IN (SELECT TRIM(value) FROM STRING_SPLIT(@domainIdWildcards, ',')) OR
 				child.domain_id IN (SELECT TRIM(value) FROM STRING_SPLIT(@omopAllowedConceptDomainIds, ','))
+			) AND
+			(
+				ISNULL(@omopAllowedConceptClassIds, '') IN (SELECT TRIM(value) FROM STRING_SPLIT(@classIdWildcards, ',')) OR
+				child.concept_class_id IN (SELECT TRIM(value) FROM STRING_SPLIT(@omopAllowedConceptClassIds, ','))
 			)
 	)
 
